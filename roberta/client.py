@@ -30,7 +30,7 @@ model_name_or_path = "roberta-large"
 task = "mrpc"
 peft_type = PeftType.LORA
 device = "cuda"
-num_epochs = 20
+num_epochs =3
 
 peft_config = LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1)
 lr = 3e-4
@@ -72,10 +72,10 @@ def load_data():
     num_examples = {"trainset" : len(tokenized_datasets["train"]), "testset" : len(tokenized_datasets["validation"])}
     return train_dataloader, eval_dataloader, num_examples
     
-def train(model, train_dataloader,eval_dataloader, num_epochs):
+def train(model, train_dataloader,eval_dataloader, epochs):
     """Train the network on the training set."""
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    for epoch in range(num_epochs):
+    for epoch in range(epochs):
         model.train()
         for step, batch in enumerate(tqdm(train_dataloader)):
             batch.to(device)
@@ -124,15 +124,21 @@ trainloader, testloader, num_examples = load_data()
 
 class CifarClient(fl.client.NumPyClient):
     def get_parameters(self, config):
-        return {
-            k: v.cpu()
-            for k, v in get_peft_model_state_dict(model).items()
-        }
+        """Return the parameters of the current net."""
 
-    def set_parameters(self, weights):
-        return set_peft_model_state_dict(model, weights)
+        state_dict = get_peft_model_state_dict(model)
+        return [val.cpu().numpy() for _, val in state_dict.items()]
+
+    def set_parameters(self, parameters) -> None:
+        """Change the parameters of the model using the given ones."""
+        peft_state_dict_keys = get_peft_model_state_dict(model).keys()
+        params_dict = zip(peft_state_dict_keys, parameters)
+        state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
+        set_peft_model_state_dict(model, state_dict)
 
     def fit(self, parameters, config):
+        #print(parameters)
+        print("Parameters received", parameters)
         self.set_parameters(parameters)
         train(model, trainloader,testloader, epochs=1)
         return self.get_parameters(config={}), num_examples["trainset"], {}
