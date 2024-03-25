@@ -25,7 +25,7 @@ import flwr as fl
 DEVICE = torch.device("cuda")
 
 
-batch_size = 32
+batch_size = 6
 model_name_or_path = "roberta-large"
 task = "mrpc"
 peft_type = PeftType.LORA
@@ -74,40 +74,32 @@ def load_data():
     
 def train(model, train_dataloader,eval_dataloader, epochs):
     """Train the network on the training set."""
-    # optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    # for epoch in range(epochs):
-    #     model.to(device)
-    #     model.train()
-    #     for step, batch in enumerate(train_dataloader):
-    #         # batch.to(device)
-    #         batch = {k: v.to(device) for k, v in batch.items()}
-    #         outputs = model(**batch)
-    #         loss = outputs.loss
-    #         loss.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     for epoch in range(epochs):
         model.to(device)
         model.train()
-        total_loss = 0  # 初始化用于累加loss的变量
-        num_batches = 0  # 记录处理的batch数量，用于计算平均loss
-
-        for step, batch in enumerate(train_dataloader):
+        for step, batch in enumerate(tqdm(train_dataloader)):
+            # batch.to(device)
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             loss = outputs.loss
-
-            loss.backward()  # 反向传播计算梯度
-            optimizer.step()  # 更新模型参数
-            optimizer.zero_grad()  # 清除梯度信息
-            
-            total_loss += loss.item()  # 累加这个batch的loss
-            num_batches += 1
-
-        average_loss = total_loss / num_batches  # 计算这个epoch的平均loss
-        print(f"Epoch {epoch+1}/{epochs}, Average Loss: {average_loss:.4f}")
-
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+                
+        model.eval()
+        for step, batch in enumerate(tqdm(eval_dataloader)):
+            batch.to(device)
+            with torch.no_grad():
+                outputs = model(**batch)
+            predictions = outputs.logits.argmax(dim=-1)
+            predictions, references = predictions, batch["labels"]
+            metric.add_batch(
+                predictions=predictions,
+                references=references,
+            )
+        eval_metric = metric.compute()
+        print(f"epoch {epoch}:", eval_metric)
 
 def test(net, testloader):
     """Validate the network on the entire test set."""
@@ -133,7 +125,7 @@ model.print_trainable_parameters()
 
 trainloader, testloader, num_examples = load_data()
 
-class LoraClient(fl.client.NumPyClient):
+class CifarClient(fl.client.NumPyClient):
     def get_parameters(self, config):
         """Return the parameters of the current net."""
 
@@ -151,14 +143,12 @@ class LoraClient(fl.client.NumPyClient):
         #print(parameters)
         # print("Parameters received", parameters)
         self.set_parameters(parameters)
-        train(model, trainloader,testloader, epochs=3)
+        train(model, trainloader,testloader, epochs=8)
         return self.get_parameters(config={}), num_examples["trainset"], {}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
         loss, accuracy = test(model, testloader)
         return float(loss), num_examples["testset"], {"accuracy": float(accuracy)}
-
-        
-# server_address = "127.0.0.1:8080" 
-# fl.client.start_client(server_address=server_address, client=CifarClient().to_client())
+server_address = "127.0.0.1:8080" 
+fl.client.start_client(server_address=server_address, client=CifarClient().to_client())
