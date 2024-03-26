@@ -9,6 +9,11 @@ from peft import (
     PromptEncoderConfig,
 )
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup, set_seed
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    # 加载模型的代码放在这里
 
 model_cfg = {
     "model_name_or_path": "roberta-large",
