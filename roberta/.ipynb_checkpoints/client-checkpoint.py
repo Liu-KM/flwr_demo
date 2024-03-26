@@ -18,37 +18,23 @@ from peft import (
 )
 import evaluate
 from datasets import load_dataset
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup, set_seed
 from tqdm import tqdm
 import flwr as fl
-from model import get_model
+
+DEVICE = torch.device("cuda")
 
 
-train_cfg = {
-    "max_length": 128,
-    "batch_size": 32,
-    "model_name_or_path": "roberta-large",
-    "task": "mrpc",
-    "peft_type": PeftType.LORA,
-    "device": "cuda:0" if torch.cuda.is_available() else "cpu",
-    "num_epochs": 3,
-    "peft_config": LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1),
-    "lr": 3e-4,
-}
-model_cfg = {
-    "model_name_or_path": "roberta-large",
-    "peft_config": LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1),
-}
-batch_size = 32
+batch_size = 6
 model_name_or_path = "roberta-large"
 task = "mrpc"
 peft_type = PeftType.LORA
-# device = "cuda:0" if torch.cuda.is_available() else "cpu"
+device = "cuda"
 num_epochs =3
 
 peft_config = LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1)
 lr = 3e-4
 metric = evaluate.load("glue", task)
-
 
 
 def load_data():
@@ -86,35 +72,21 @@ def load_data():
     num_examples = {"trainset" : len(tokenized_datasets["train"]), "testset" : len(tokenized_datasets["validation"])}
     return train_dataloader, eval_dataloader, num_examples
     
-def train(model,train_dataloader,eval_dataloader,epochs,device):
+def train(model, train_dataloader,eval_dataloader, epochs):
     """Train the network on the training set."""
-    # optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    # for epoch in range(epochs):
-    #     model.to(device)
-    #     model.train()
-    #     for step, batch in enumerate(train_dataloader):
-    #         # batch.to(device)
-    #         batch = {k: v.to(device) for k, v in batch.items()}
-    #         outputs = model(**batch)
-    #         loss = outputs.loss
-    #         loss.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9)
     for epoch in range(epochs):
         model.to(device)
         model.train()
-        total_loss = 0  # 初始化用于累加loss的变量
-        num_batches = 0  # 记录处理的batch数量，用于计算平均loss
-
-        for step, batch in enumerate(train_dataloader):
+        for step, batch in enumerate(tqdm(train_dataloader)):
+            # batch.to(device)
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             loss = outputs.loss
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
-
+                
         model.eval()
         for step, batch in enumerate(tqdm(eval_dataloader)):
             batch.to(device)
@@ -129,7 +101,7 @@ def train(model,train_dataloader,eval_dataloader,epochs,device):
         eval_metric = metric.compute()
         print(f"epoch {epoch}:", eval_metric)
 
-def test(model, testloader,device):
+def test(net, testloader):
     """Validate the network on the entire test set."""
     model.to(device)
     model.eval()
@@ -147,28 +119,13 @@ def test(model, testloader,device):
     print(f"{eval_metric}")
     return eval_metric["f1"], eval_metric["accuracy"]
 
+model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path, return_dict=True)
+model = get_peft_model(model, peft_config)
+model.print_trainable_parameters()
 
 trainloader, testloader, num_examples = load_data()
 
 class CifarClient(fl.client.NumPyClient):
-    def __init__(
-    self,
-    model_cfg,
-    train_cfg,
-    trainset,
-    tokenizer,
-    ):  # pylint: disable=too-many-arguments
-        device_id = self.cid % torch.cuda.device_count()
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.train_cfg = train_cfg
-        self.tokenizer = tokenizer
-
-        # instantiate model
-        self.model = get_model(model_cfg)
-
-        self.trainset = trainset
-
-
     def get_parameters(self, config):
         """Return the parameters of the current net."""
 
@@ -186,14 +143,12 @@ class CifarClient(fl.client.NumPyClient):
         #print(parameters)
         # print("Parameters received", parameters)
         self.set_parameters(parameters)
-        train(model, trainloader,testloader, epochs=1,device = self.device)
+        train(model, trainloader,testloader, epochs=8)
         return self.get_parameters(config={}), num_examples["trainset"], {}
 
     def evaluate(self, parameters, config):
         self.set_parameters(parameters)
         loss, accuracy = test(model, testloader)
         return float(loss), num_examples["testset"], {"accuracy": float(accuracy)}
-
-        
-# server_address = "127.0.0.1:8080" 
-# fl.client.start_client(server_address=server_address, client=CifarClient().to_client())
+server_address = "127.0.0.1:8080" 
+fl.client.start_client(server_address=server_address, client=CifarClient().to_client())
