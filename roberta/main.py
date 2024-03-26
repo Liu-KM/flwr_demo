@@ -3,7 +3,7 @@ from typing import List
 import torch
 from collections import OrderedDict
 from client import LoraClient
-
+from peft import LoraConfig
 # 创建客户端实例
 def client_fn(cid: str) -> fl.client.Client:
     return LoraClient()
@@ -11,6 +11,13 @@ def client_fn(cid: str) -> fl.client.Client:
 # 主程序
 if __name__ == "__main__":
     # 定义 FedAvg 聚合策略
+    model_cfg = {
+    "model_name_or_path": "roberta-large",
+    "peft_config": LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1),
+}
+
+
+
     strategy = fl.server.strategy.FedAvg(
         fraction_fit=0.4,
         min_fit_clients=2,
