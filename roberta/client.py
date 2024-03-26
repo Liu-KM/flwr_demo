@@ -18,15 +18,10 @@ from peft import (
     PromptEncoderConfig,
 )
 import evaluate
-from mydata import get_fds,get_tokenizer
+from mydata import get_fds,get_tokenizer,process_dataset
 from tqdm import tqdm
 import flwr as fl
 from model import get_model
-import warnings
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    # 加载模型的代码放在这里
 
 
 
@@ -94,16 +89,17 @@ class LoraClient(fl.client.NumPyClient):
     train_cfg,
     trainset,
     testset,
+    model,
+    tokenizer,
     ):  # pylint: disable=too-many-arguments
+        self.model = model
         self.device = torch.device(f"cuda" if torch.cuda.is_available() else "cpu")
         self.train_cfg = train_cfg
         self.metric = evaluate.load("glue", task)
-        # instantiate model
-        self.model = get_model(model_cfg)
         self.trainset = trainset
         self.testset = testset
         self.num_examples = {"trainset" : len(self.trainset), "testset" : len(self.testset)}
-        self.tokenizer = tokenizer = get_tokenizer(train_cfg.model_name_or_path)
+        self.tokenizer = tokenizer
 
     def get_parameters(self, config):
         """Return the parameters of the current net."""
@@ -141,42 +137,23 @@ def gen_client_fn(
     model_cfg,
     train_cfg,
     fds,
-    tokenizer,
+    model
 ) -> Callable[[str], LoraClient]:  # pylint: disable=too-many-arguments
     """Generate the client function that creates the Flower Clients."""
 
     def client_fn(cid: str) -> LoraClient:
         """Create a Flower client representing a single organization."""
         # Let's get the partition corresponding to the i-th client
-        def tokenize_function(examples):
-            # max_length=None => use the model max length (it's actually the default)
-            outputs = tokenizer(examples["sentence1"], examples["sentence2"], truncation=True, max_length=None)
-            return outputs
-
-        client_trainset = (
-            fds.load_partition(int(cid), "train")
-        )
-        client_trainset = client_trainset.map(
-            tokenize_function,
-            batched=True,
-            remove_columns=["idx", "sentence1", "sentence2"],
-        )
-
-        client_testset = (
-            fds.load_partition(int(cid), "test")
-        )
-        client_testset = client_testset.map(
-            tokenize_function,
-            batched=True,
-            remove_columns=["idx", "sentence1", "sentence2"],
-        )
-        client_trainset = client_trainset.rename_column("label", "labels")
-        client_testset = client_testset.rename_column("label", "labels")
+        tokenizer = get_tokenizer(train_cfg.model_name_or_path)
+        client_trainset = process_dataset(fds.load_partition(int(cid), "train"),tokenizer)
+        client_testset = process_dataset(fds.load_partition(int(cid), "test"),tokenizer)
+        
         return LoraClient(
             model_cfg,
             train_cfg,
             client_trainset,
             client_testset,
+            model
             ).to_client()
 
     return client_fn

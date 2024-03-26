@@ -7,7 +7,9 @@ from peft import LoraConfig,PeftType
 from mydata import get_fds,get_tokenizer
 from types import SimpleNamespace
 import warnings
-
+from utils import get_evaluate_fn
+from transformers import AutoModelForSequenceClassification
+from peft import get_peft_model
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     # 加载模型的代码放在这里
@@ -38,6 +40,7 @@ if __name__ == "__main__":
     train_cfg = SimpleNamespace(**train_cfg)
 
     fds = get_fds(train_cfg.dataset,train_cfg.task,num_clients)
+    
     tokenizer = get_tokenizer(train_cfg.model_name_or_path)
 
     client_fn = gen_client_fn(
@@ -46,15 +49,17 @@ if __name__ == "__main__":
         fds,
         tokenizer,
         )
-    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # 加载模型的代码放在这里
+        model = AutoModelForSequenceClassification.from_pretrained(model_cfg.model_name_or_path, return_dict=True)
+        model = get_peft_model(model, model_cfg.peft_config)
     strategy = fl.server.strategy.FedAvg(
         fraction_fit=0.4,
         min_fit_clients=2,
         min_available_clients=num_clients,
+        evaluate_fn=get_evaluate_fn(model)
     )
-
-
-
 
     # server_address = "127.0.0.1:8080" 
     # 启动模拟，运行服务器和指定数量的客户端
@@ -63,7 +68,7 @@ if __name__ == "__main__":
         num_clients=num_clients,  # 模拟的客户端数量
         config=fl.server.ServerConfig(num_rounds=3),
         strategy=strategy,
-        ray_init_args = {'num_cpus': 80, 'num_gpus': 5},
+        ray_init_args = {'num_cpus': 80, 'num_gpus': 4},
         client_resources={'num_cpus': 2, 'num_gpus': 0.5},
     )
     
