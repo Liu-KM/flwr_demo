@@ -18,23 +18,18 @@ from peft import (
     PromptEncoderConfig,
 )
 import evaluate
-from data import get_fds
+from mydata import get_fds,get_tokenizer
 from tqdm import tqdm
 import flwr as fl
 from model import get_model
+import warnings
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    # 加载模型的代码放在这里
 
 
-train_cfg = {
-    "max_length": 128,
-    "batch_size": 32,
-    "model_name_or_path": "roberta-large",
-    "task": "mrpc",
-    "peft_type": PeftType.LORA,
-    "device": "cuda:0" if torch.cuda.is_available() else "cpu",
-    "num_epochs": 3,
-    "peft_config": LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1),
-    "lr": 3e-4,
-}
+
 model_cfg = {
     "model_name_or_path": "roberta-large",
     "peft_config": LoraConfig(task_type="SEQ_CLS", inference_mode=False, r=8, lora_alpha=16, lora_dropout=0.1),
@@ -68,7 +63,7 @@ def train(model,train_dataloader,epochs,device):
             optimizer.zero_grad()
             total_loss += loss.item()
             num_batches += 1
-        print(f"Epoch {epoch} - Average loss: {total_loss / num_batches}")
+        # print(f"Epoch {epoch} - Average loss: {total_loss / num_batches}")
 
 
 def test(model,testloader,metric,device):
@@ -87,7 +82,7 @@ def test(model,testloader,metric,device):
             references=references,
         )
     eval_metric = metric.compute()
-    print(f"{eval_metric}")
+    # print(f"{eval_metric}")
     return eval_metric["f1"], eval_metric["accuracy"]
 
 
@@ -108,6 +103,7 @@ class LoraClient(fl.client.NumPyClient):
         self.trainset = trainset
         self.testset = testset
         self.num_examples = {"trainset" : len(self.trainset), "testset" : len(self.testset)}
+        self.tokenizer = tokenizer = get_tokenizer(train_cfg.model_name_or_path)
 
     def get_parameters(self, config):
         """Return the parameters of the current net."""
@@ -152,20 +148,35 @@ def gen_client_fn(
     def client_fn(cid: str) -> LoraClient:
         """Create a Flower client representing a single organization."""
         # Let's get the partition corresponding to the i-th client
+        def tokenize_function(examples):
+            # max_length=None => use the model max length (it's actually the default)
+            outputs = tokenizer(examples["sentence1"], examples["sentence2"], truncation=True, max_length=None)
+            return outputs
+
         client_trainset = (
             fds.load_partition(int(cid), "train")
         )
+        client_trainset = client_trainset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=["idx", "sentence1", "sentence2"],
+        )
+
         client_testset = (
             fds.load_partition(int(cid), "test")
         )
-        client_trainset = client_trainset.rename_column("output", "response")
-
+        client_testset = client_testset.map(
+            tokenize_function,
+            batched=True,
+            remove_columns=["idx", "sentence1", "sentence2"],
+        )
+        client_trainset = client_trainset.rename_column("label", "labels")
+        client_testset = client_testset.rename_column("label", "labels")
         return LoraClient(
             model_cfg,
             train_cfg,
             client_trainset,
             client_testset,
-            tokenizer,
             ).to_client()
 
     return client_fn
