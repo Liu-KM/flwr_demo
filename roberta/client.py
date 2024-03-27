@@ -149,11 +149,12 @@ def gen_client_fn(
         client_testset = process_dataset(fds.load_partition(int(cid), "test"),tokenizer)
         
         return LoraClient(
-            model_cfg,
-            train_cfg,
-            client_trainset,
-            client_testset,
-            model
+            model_cfg=model_cfg,
+            train_cfg=train_cfg,
+            trainset=client_trainset,
+            testset=client_testset,
+            model=model,
+            tokenizer=tokenizer
             ).to_client()
 
     return client_fn
