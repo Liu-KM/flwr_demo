@@ -4,9 +4,9 @@ from typing import Dict, Optional, Tuple
 from mydata import get_tokenizer
 import torch
 import datasets
-def get_evaluate_fn(model):
+def get_evaluate_fn(model,logfile="log.csv"):
     """Return an evaluation function for server-side evaluation."""
-
+    
     # Load data here to avoid the overhead of doing it in `evaluate` itself
     fds = FederatedDataset(dataset="glue",subset="mrpc", partitioners={"train": 10})
     test = fds.load_split("test")
@@ -19,8 +19,10 @@ def get_evaluate_fn(model):
             tokenize_function,
             batched=True,
             remove_columns=["idx", "sentence1", "sentence2"],
+            verbose=False,
         )
     test = test.rename_column("label", "labels")
+    metric = datasets.load_metric("glue", "mrpc")
     # The `evaluate` function will be called after every round
     def evaluate(
         server_round: int,
@@ -29,10 +31,8 @@ def get_evaluate_fn(model):
     ) -> Optional[Tuple[float, Dict[str, fl.common.Scalar]]]:
         model.set_weights(parameters)  # Update model with the latest parameters
         model.eval()
-        metric = datasets.load_metric("glue", "mrpc")
         testloader = torch.utils.data.DataLoader(test, batch_size=32)
         for step, batch in enumerate(testloader):
-
             with torch.no_grad():
                 outputs = model(**batch)
             predictions = outputs.logits.argmax(dim=-1)
@@ -43,6 +43,7 @@ def get_evaluate_fn(model):
             )
         eval_metric = metric.compute()
         f1, accuracy = eval_metric["f1"], eval_metric["accuracy"]
+        print(f"Server evaluate result:\nRound: {server_round} \nAccuracy: {accuracy}, F1: {f1}")
         return eval_metric['loss'], {"accuracy": accuracy, "f1": f1}
 
     return evaluate
